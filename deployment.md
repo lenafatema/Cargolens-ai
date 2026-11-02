@@ -61,7 +61,7 @@ Live demo: https://cargolens-ai.onrender.com
 - Executive: `reviewer@cargolens.demo` / `Review2026!`
 - Manager: `manager@cargolens.demo` / `Manager2026!`
 
-The demo database is local-only. Change demo credentials and set a strong `SECRET_KEY` before exposing a deployment. Sample company names and shipment records are fictional.
+The local and hosted demo accounts use the credentials above. The hosted app contains fictional sample companies and shipment records; use it only for evaluation, not real trade documents.
 
 ## Deployment
 
