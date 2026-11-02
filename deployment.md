@@ -2,6 +2,8 @@
 
 Project repository: https://github.com/lenafatema/Cargolens-ai
 
+Live demo: https://cargolens-ai.onrender.com
+
 
 ## Prerequisites
 
@@ -63,6 +65,6 @@ The demo database is local-only. Change demo credentials and set a strong `SECRE
 
 ## Deployment
 
-The repository includes a Render Blueprint in `render.yaml`. To create a public demo, sign in to Render, choose **New → Blueprint**, connect `lenafatema/Cargolens-ai`, and apply the blueprint. It builds the Flask app, runs Gunicorn, generates a `SECRET_KEY`, enables production cookie settings, and checks `/health`. Add `OPENAI_API_KEY` in the service environment if AI extraction is required; it is optional for manual review. Render provides the live URL after the service becomes healthy.
+The repository includes a Render Blueprint in `render.yaml`. To create a public demo, sign in to Render, choose **New → Blueprint**, connect `lenafatema/Cargolens-ai`, and apply the blueprint. It builds the Flask app, runs Gunicorn, generates a `SECRET_KEY`, enables production cookie settings, and checks `/health`. Add `OPENAI_API_KEY` in the service environment if AI extraction is required; it is optional for manual review. The deployed demo is available at https://cargolens-ai.onrender.com. Its health endpoint is https://cargolens-ai.onrender.com/health.
 
-The Blueprint uses a free single instance. Render free web services spin down after 15 idle minutes, and their local filesystem is ephemeral; SQLite changes and uploaded files are lost on spin-down, restart or redeploy. Sample records are seeded again at startup, but reviewer changes and uploaded files will be lost. See [Render free plan limitations](https://render.com/docs/free). For a durable single-instance demo, use a paid service with a persistent disk and set `DATABASE_PATH` and `UPLOAD_DIR` to paths on that disk. For production multi-instance use, migrate to managed PostgreSQL and private object storage, configure retention and backups, and restrict access to uploaded trade documents. The application has not been deployed yet, so no live URL is available.
+The Blueprint uses a free single instance. Render free web services spin down after 15 idle minutes, and their local filesystem is ephemeral; SQLite changes and uploaded files are lost on spin-down, restart or redeploy. Sample records are seeded again at startup, but reviewer changes and uploaded files will be lost. See [Render free plan limitations](https://render.com/docs/free). For a durable single-instance demo, use a paid service with a persistent disk and set `DATABASE_PATH` and `UPLOAD_DIR` to paths on that disk. For production multi-instance use, migrate to managed PostgreSQL and private object storage, configure retention and backups, and restrict access to uploaded trade documents. The live demo is a synthetic-data reviewer instance; uploaded files and changes are temporary on the free service.
