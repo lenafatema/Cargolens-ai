@@ -34,6 +34,39 @@ class CargoLensTests(unittest.TestCase):
         self.assertEqual(weight["severity"],"issue")
         self.assertEqual(weight["delta"],"45 kg difference")
 
+    def test_weight_and_package_checks_include_all_three_document_types(self):
+        with cargo.app.app_context():
+            sid=cargo.db().execute("SELECT id FROM shipments WHERE ref='SHP-24806'").fetchone()[0]
+            checks=cargo.checks_for(sid)
+        weight=next(c for c in checks if c["label"]=="Gross weight")
+        packages=next(c for c in checks if c["label"]=="Package count")
+        self.assertEqual(weight["severity"],"clear")
+        self.assertEqual(packages["severity"],"clear")
+        for kind in cargo.REQUIRED_DOCUMENTS:
+            self.assertIn(kind,weight["detail"])
+            self.assertIn(kind,packages["detail"])
+
+    def test_invoice_line_item_sum_is_checked_and_mismatch_blocks_approval(self):
+        import json
+        with cargo.app.app_context():
+            sid=cargo.db().execute("SELECT id FROM shipments WHERE ref='SHP-24806'").fetchone()[0]
+            doc=cargo.db().execute("SELECT id,extracted_json FROM documents WHERE shipment_id=? AND kind='Commercial invoice'",(sid,)).fetchone()
+            fields=json.loads(doc["extracted_json"]); fields["line_items"][0]["line_total"]="14001.00"
+            cargo.db().execute("UPDATE documents SET extracted_json=? WHERE id=?",(json.dumps(fields),doc["id"])); cargo.db().commit()
+            check=next(c for c in cargo.checks_for(sid) if c["label"]=="Invoice total vs line items")
+        self.assertEqual(check["severity"],"issue")
+        self.login("manager@cargolens.demo","Manager2026!")
+        response=self.client.post(f"/shipments/{sid}/approve",data={"csrf_token":self.token()},follow_redirects=True)
+        self.assertIn(b"Approval is blocked",response.data)
+        with cargo.app.app_context():
+            self.assertNotEqual(cargo.db().execute("SELECT status FROM shipments WHERE id=?",(sid,)).fetchone()[0],"Approved")
+
+    def test_missing_bill_of_lading_blocks_approval(self):
+        self.login("manager@cargolens.demo","Manager2026!")
+        with cargo.app.app_context(): sid=cargo.db().execute("SELECT id FROM shipments WHERE ref='SHP-24798'").fetchone()[0]
+        response=self.client.post(f"/shipments/{sid}/approve",data={"csrf_token":self.token()},follow_redirects=True)
+        self.assertIn(b"Approval is blocked",response.data)
+
     def test_extraction_without_provider_requires_manual_review(self):
         os.environ.pop("OPENAI_API_KEY",None)
         self.assertEqual(cargo.extract_fields("Invoice number: INV-1", "Commercial invoice"),({},0.0))

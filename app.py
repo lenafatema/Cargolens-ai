@@ -1,4 +1,5 @@
 import csv
+from decimal import Decimal, InvalidOperation
 import io
 import os
 import re
@@ -35,17 +36,17 @@ CREATE TABLE IF NOT EXISTS decisions(id INTEGER PRIMARY KEY, shipment_id INTEGER
 
 SAMPLE = [
     ("SHP-24811", "Northstar Components Ltd", "Asterion Controls GmbH", "Germany", [
-        ("Commercial invoice", "Invoice CI-8842 · 2026-10-28", {"invoice_number":"CI-8842","invoice_date":"2026-10-28","currency":"USD","total_value":"48,600.00","packages":"120","gross_weight_kg":"3120","supplier":"Asterion Controls GmbH"}, .96),
+        ("Commercial invoice", "Invoice CI-8842 · 2026-10-28", {"invoice_number":"CI-8842","invoice_date":"2026-10-28","currency":"USD","total_value":"48,600.00","line_items":[{"description":"Servo assemblies","quantity":"120","unit_price":"280.00","line_total":"33,600.00"},{"description":"Control modules","quantity":"60","unit_price":"250.00","line_total":"15,000.00"}],"packages":"120","gross_weight_kg":"3120","supplier":"Asterion Controls GmbH"}, .96),
         ("Packing list", "Packing list PL-8842 · 2026-10-29", {"invoice_number":"CI-8842","packages":"120","gross_weight_kg":"3165","net_weight_kg":"2980"}, .91),
-        ("Bill of lading", "B/L OOLU-782640 · 2026-10-30", {"bill_number":"OOLU-782640","packages":"120","gross_weight_kg":"3165","origin":"Hamburg"}, .94),
+        ("Bill of lading", "B/L OOLU-782640 · 2026-10-30", {"bill_number":"OOLU-782640","invoice_number":"CI-8842","packages":"120","gross_weight_kg":"3165","origin":"Hamburg"}, .94),
     ]),
     ("SHP-24806", "Meridian Medical Systems", "Haneul Precision Co.", "South Korea", [
-        ("Commercial invoice", "Invoice INV-2026-771", {"invoice_number":"INV-2026-771","currency":"USD","total_value":"22,940.00","packages":"48","gross_weight_kg":"940","supplier":"Haneul Precision Co."}, .98),
+        ("Commercial invoice", "Invoice INV-2026-771", {"invoice_number":"INV-2026-771","currency":"USD","total_value":"22,940.00","line_items":[{"description":"Precision pump bodies","quantity":"40","unit_price":"350.00","line_total":"14,000.00"},{"description":"Valve assemblies","quantity":"60","unit_price":"149.00","line_total":"8,940.00"}],"packages":"48","gross_weight_kg":"940","supplier":"Haneul Precision Co."}, .98),
         ("Packing list", "Packing list PL-771", {"invoice_number":"INV-2026-771","packages":"48","gross_weight_kg":"940","net_weight_kg":"810"}, .97),
-        ("Bill of lading", "B/L EGLV-551029", {"bill_number":"EGLV-551029","packages":"48","gross_weight_kg":"940","origin":"Busan"}, .95),
+        ("Bill of lading", "B/L EGLV-551029", {"bill_number":"EGLV-551029","invoice_number":"INV-2026-771","packages":"48","gross_weight_kg":"940","origin":"Busan"}, .95),
     ]),
     ("SHP-24798", "Bluepeak Outdoor Goods", "Vela Textiles S.A.", "Portugal", [
-        ("Commercial invoice", "Invoice VT-1908", {"invoice_number":"VT-1908","currency":"EUR","total_value":"16,280.00","packages":"86","gross_weight_kg":"1820","supplier":"Vela Textiles S.A."}, .82),
+        ("Commercial invoice", "Invoice VT-1908", {"invoice_number":"VT-1908","currency":"EUR","total_value":"16,280.00","line_items":[{"description":"Merino crew sweaters","quantity":"40","unit_price":"220.00","line_total":"8,800.00"},{"description":"Cotton knit jackets","quantity":"20","unit_price":"374.00","line_total":"7,480.00"}],"packages":"86","gross_weight_kg":"1820","supplier":"Vela Textiles S.A."}, .82),
         ("Packing list", "Packing list PL-1908", {"invoice_number":"VT-1908","packages":"86","gross_weight_kg":"1818","net_weight_kg":"1650"}, .68),
     ]),
 ]
@@ -126,24 +127,54 @@ def dashboard():
     cards=[]
     for s in shipments:
         checks=checks_for(s["id"]); docs=db().execute("SELECT * FROM documents WHERE shipment_id=?",(s["id"],)).fetchall()
-        cards.append({**dict(s),"checks":checks,"issue_count":sum(c["severity"]=="issue" for c in checks),"review_count":sum(d["state"]!="Confirmed" for d in docs)})
+        cards.append({**dict(s),"checks":checks,"issue_count":sum(c["severity"]=="issue" for c in checks),"check_review_count":sum(c["severity"]=="review" for c in checks),"review_count":sum(d["state"]!="Confirmed" for d in docs)})
     doc_total=db().execute("SELECT COUNT(*) FROM documents").fetchone()[0]
     confirmed=db().execute("SELECT COUNT(*) FROM documents WHERE state='Confirmed'").fetchone()[0]
-    return render_template("dashboard.html", shipments=cards, total=len(cards), issue_total=sum(s["issue_count"] for s in cards), review_total=sum(s["review_count"] for s in cards), doc_total=doc_total, confirmed_pct=round(confirmed*100/doc_total) if doc_total else 0, ready_total=sum(s["status"]=='Ready to verify' for s in cards))
+    return render_template("dashboard.html", shipments=cards, total=len(cards), issue_total=sum(s["issue_count"] for s in cards), review_total=sum(bool(s["review_count"] or s["check_review_count"] or s["issue_count"]) for s in cards), doc_total=doc_total, confirmed_pct=round(confirmed*100/doc_total) if doc_total else 0, ready_total=sum(s["status"]=='Ready to verify' for s in cards))
+
+REQUIRED_DOCUMENTS=("Commercial invoice","Packing list","Bill of lading")
+
+def decimal_value(value):
+    try:
+        result=Decimal(str(value).replace(",","").replace("$","").replace("€","").strip())
+        return result if result.is_finite() else None
+    except (InvalidOperation, ValueError, TypeError): return None
+
+def valid_line_items(items):
+    if not isinstance(items,list) or not items or len(items)>200: return False
+    return all(isinstance(item,dict) and item.get("description") and decimal_value(item.get("line_total")) is not None for item in items)
 
 def checks_for(sid):
-    docs=db().execute("SELECT * FROM documents WHERE shipment_id=?",(sid,)).fetchall()
-    parsed={d["kind"]:__import__('json').loads(d["extracted_json"]) for d in docs}
+    import json
+    docs=db().execute("SELECT * FROM documents WHERE shipment_id=? ORDER BY id",(sid,)).fetchall()
+    parsed={d["kind"]:json.loads(d["extracted_json"]) for d in docs}
     checks=[]
-    def compare(label,key,units=""):
-        vals=[(kind,fields.get(key)) for kind,fields in parsed.items() if fields.get(key) not in (None,"")]
-        unique={v for _,v in vals}
-        if len(vals)>1:
-            bad=len(unique)>1
-            checks.append({"label":label,"severity":"issue" if bad else "clear","detail":" · ".join(f"{k}: {v}{units}" for k,v in vals),"delta":(f"{abs(float(vals[0][1].replace(',',''))-float(vals[1][1].replace(',',''))):g} {units} difference" if bad and key.endswith("weight_kg") else "Values agree" if not bad else "Values differ")})
-    compare("Gross weight", "gross_weight_kg", "kg")
-    compare("Package count", "packages", " packages")
-    compare("Invoice reference", "invoice_number")
+    missing_docs=[kind for kind in REQUIRED_DOCUMENTS if kind not in parsed]
+    checks.append({"label":"Required document set","severity":"review" if missing_docs else "clear","detail":("Missing: "+", ".join(missing_docs)) if missing_docs else "Invoice, packing list and bill of lading are present","delta":"Upload each required document" if missing_docs else "All three document types present"})
+    def compare(label,key,kinds,units="",numeric=False):
+        missing=[kind for kind in kinds if kind not in parsed or parsed[kind].get(key) in (None,"")]
+        vals=[(kind,parsed[kind][key]) for kind in kinds if kind in parsed and parsed[kind].get(key) not in (None,"")]
+        if missing:
+            checks.append({"label":label,"severity":"review","detail":" · ".join(f"{k}: {v}{units}" for k,v in vals) or "No comparable values found","delta":"Add values for: "+", ".join(missing)})
+            return
+        normalized=[decimal_value(v) for _,v in vals] if numeric else [str(v).strip().casefold() for _,v in vals]
+        if numeric and any(v is None for v in normalized):
+            checks.append({"label":label,"severity":"review","detail":" · ".join(f"{k}: {v}{units}" for k,v in vals),"delta":"One or more values could not be parsed"}); return
+        mismatch=len(set(normalized))>1
+        difference=(max(normalized)-min(normalized)) if numeric and mismatch else None
+        checks.append({"label":label,"severity":"issue" if mismatch else "clear","detail":" · ".join(f"{k}: {v}{units}" for k,v in vals),"delta":f"{difference:g} {units.strip()} difference" if difference is not None else "Values differ" if mismatch else "Values agree"})
+    compare("Gross weight","gross_weight_kg",REQUIRED_DOCUMENTS," kg",True)
+    compare("Package count","packages",REQUIRED_DOCUMENTS," packages",True)
+    compare("Invoice reference","invoice_number",REQUIRED_DOCUMENTS)
+    invoice=parsed.get("Commercial invoice",{})
+    total=decimal_value(invoice.get("total_value"))
+    items=invoice.get("line_items")
+    if total is None or not valid_line_items(items):
+        checks.append({"label":"Invoice total vs line items","severity":"review","detail":"Invoice total or valid line-item amounts are missing","delta":"Enter invoice total and each line total"})
+    else:
+        line_sum=sum((decimal_value(item["line_total"]) for item in items),Decimal("0"))
+        difference=abs(total-line_sum)
+        checks.append({"label":"Invoice total vs line items","severity":"clear" if difference<=Decimal("0.01") else "issue","detail":f"Invoice total: {total:.2f} · Line-item sum: {line_sum:.2f}","delta":"Values agree" if difference<=Decimal("0.01") else f"{difference:.2f} difference"})
     return checks
 
 @app.get("/shipments/new")
@@ -167,15 +198,20 @@ def shipment(sid):
     if not s: abort(404)
     docs=db().execute("SELECT * FROM documents WHERE shipment_id=? ORDER BY id",(sid,)).fetchall()
     import json
+    document_views=[]
+    for d in docs:
+        fields=json.loads(d["extracted_json"])
+        if isinstance(fields.get("line_items"),list): fields["line_items"]=json.dumps(fields["line_items"],ensure_ascii=False)
+        document_views.append({**dict(d),"fields":fields})
     history=db().execute("SELECT e.*,u.name,d.kind FROM edits e JOIN users u ON u.id=e.user_id JOIN documents d ON d.id=e.document_id WHERE d.shipment_id=? ORDER BY e.id DESC LIMIT 8",(sid,)).fetchall()
     decisions=db().execute("SELECT d.*,u.name FROM decisions d JOIN users u ON u.id=d.user_id WHERE d.shipment_id=? ORDER BY d.id DESC",(sid,)).fetchall()
-    return render_template("shipment.html", shipment=s, docs=[{**dict(d),"fields":json.loads(d["extracted_json"])} for d in docs], checks=checks_for(sid), history=history, decisions=decisions)
+    return render_template("shipment.html", shipment=s, docs=document_views, checks=checks_for(sid), history=history, decisions=decisions)
 
 def extract_fields(text, kind):
     """Ask an OpenAI-compatible provider for grounded JSON; never invent confidence."""
     api_key=os.environ.get("OPENAI_API_KEY")
     if not api_key or not text.strip(): return {}, 0.0
-    fields="invoice_number, invoice_date, currency, total_value, packages, gross_weight_kg, net_weight_kg, supplier, bill_number, origin"
+    fields="invoice_number, invoice_date, currency, total_value, line_items, packages, gross_weight_kg, net_weight_kg, supplier, bill_number, origin"
     prompt=(f"Extract fields from this {kind}. Return only JSON with keys fields and confidence. "
             f"fields must contain only values explicitly present, using empty string for absent values. "
             f"confidence is an object mapping each returned field to a number from 0 to 1. Do not infer missing facts.\n"
@@ -185,7 +221,8 @@ def extract_fields(text, kind):
     try:
         with urllib.request.urlopen(req,timeout=25) as resp: result=__import__('json').loads(resp.read())
         payload=__import__('json').loads(result["choices"][0]["message"]["content"])
-        allowed=set(fields.split(", ")); values={k:str(v)[:120] for k,v in payload.get("fields",{}).items() if k in allowed and v not in (None,"")}
+        allowed=set(fields.split(", ")); values={k:(v if k=="line_items" else str(v)[:120]) for k,v in payload.get("fields",{}).items() if k in allowed and v not in (None,"")}
+        if "line_items" in values and not valid_line_items(values["line_items"]): values.pop("line_items")
         scores=[float(payload.get("confidence",{}).get(k,0)) for k in values]
         return values, (sum(scores)/len(scores) if scores else 0.0)
     except (urllib.error.URLError, ValueError, KeyError, IndexError, TypeError, TimeoutError):
@@ -209,7 +246,7 @@ def upload(sid):
             with fitz.open(UPLOAD_DIR/stored) as pdf: text="\n".join(p.get_text() for p in pdf)[:50000]
     except Exception: text=""
     fields,conf=extract_fields(text,kind)
-    state="Needs review" if conf<.8 else "Confirmed"
+    state="Needs review"
     import json
     db().execute("INSERT INTO documents(shipment_id,kind,filename,stored_name,extracted_json,confidence,state,created_at) VALUES(?,?,?,?,?,?,?,?)",(sid,kind,name,stored,json.dumps(fields),conf,state,now())); db().commit()
     flash("Document added. Extracted values are marked for human review.","success"); return redirect(url_for("shipment",sid=sid))
@@ -220,9 +257,16 @@ def edit_field(did):
     import json
     d=db().execute("SELECT * FROM documents WHERE id=?",(did,)).fetchone()
     if not d: abort(404)
-    fields=json.loads(d["extracted_json"]); key=request.form.get("field",""); value=request.form.get("value","").strip()
-    if key not in {"invoice_number","invoice_date","currency","total_value","packages","gross_weight_kg","net_weight_kg","supplier","bill_number","origin"} or len(value)>120:
+    fields=json.loads(d["extracted_json"]); key=request.form.get("field",""); raw=request.form.get("value","").strip()
+    allowed={"invoice_number","invoice_date","currency","total_value","line_items","packages","gross_weight_kg","net_weight_kg","supplier","bill_number","origin"}
+    if key not in allowed or len(raw)>12000:
         abort(400)
+    value=raw
+    if key=="line_items":
+        try: value=json.loads(raw)
+        except ValueError: abort(400)
+        if not valid_line_items(value): abort(400)
+    elif len(raw)>120: abort(400)
     old=fields.get(key); fields[key]=value
     db().execute("UPDATE documents SET extracted_json=? WHERE id=?",(json.dumps(fields),did))
     db().execute("INSERT INTO edits(document_id,user_id,field,old_value,new_value,created_at) VALUES(?,?,?,?,?,?)",(did,session["user_id"],key,str(old or ""),value,now())); db().commit()
@@ -253,7 +297,7 @@ def download_document(did):
 @manager_required
 def approve(sid):
     docs=db().execute("SELECT * FROM documents WHERE shipment_id=?",(sid,)).fetchall(); checks=checks_for(sid)
-    if not docs or any(d["state"]!="Confirmed" for d in docs) or any(c["severity"]=="issue" for c in checks):
+    if not docs or any(d["state"]!="Confirmed" for d in docs) or any(c["severity"]!="clear" for c in checks):
         flash("Approval is blocked. Confirm every document and resolve cross-document mismatches first.","error"); return redirect(url_for("shipment",sid=sid))
     db().execute("UPDATE shipments SET status='Approved' WHERE id=?",(sid,)); db().execute("INSERT INTO decisions(shipment_id,user_id,action,note,created_at) VALUES(?,?,?,?,?)",(sid,session["user_id"],"Approved","All documents confirmed; validation clear.",now())); db().commit()
     flash("Shipment approved for export.","success"); return redirect(url_for("shipment",sid=sid))
@@ -265,7 +309,7 @@ def export_csv(sid):
     if not s: abort(404)
     docs=db().execute("SELECT * FROM documents WHERE shipment_id=?",(sid,)).fetchall()
     checks=checks_for(sid)
-    if s["status"]!="Approved" or not docs or any(d["state"]!="Confirmed" for d in docs) or any(c["severity"]=="issue" for c in checks): abort(409)
+    if s["status"]!="Approved" or not docs or any(d["state"]!="Confirmed" for d in docs) or any(c["severity"]!="clear" for c in checks): abort(409)
     import json
     out=io.StringIO(); writer=csv.writer(out); writer.writerow(["shipment_ref","importer","supplier","origin","document_type","field","value"])
     for d in docs:

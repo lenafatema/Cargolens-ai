@@ -6,3 +6,5 @@
 @media print{.sidebar,.topbar,.button,.list-actions,.tabs,.page-footer{display:none!important}.main{margin:0;padding:10px;max-width:none}.shipments-section,.metric{box-shadow:none}}
 .field-edit select{min-width:104px;max-width:130px;border:1px solid #e8edef;border-radius:5px;padding:0 5px;color:#52636f;font-size:9px;background:#fff}.edit-dot{background:#c49b51;box-shadow:0 0 0 3px #faf1df}
 .text-button:disabled{color:#aab4b9;cursor:not-allowed}
+
+.validation.review{color:#ad792f}.validation.review i{background:#fff4e2}.check-item>small.review-text{color:#ad792f}

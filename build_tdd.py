@@ -9,7 +9,7 @@ OUT="Technical_Design_Document.docx"
 doc=Document(); sec=doc.sections[0]
 sec.top_margin=Inches(.68); sec.bottom_margin=Inches(.66); sec.left_margin=Inches(.78); sec.right_margin=Inches(.78)
 styles=doc.styles
-styles['Normal'].font.name='Aptos'; styles['Normal'].font.size=Pt(9); styles['Normal'].font.color.rgb=RGBColor(49,65,77)
+styles['Normal'].font.name='Times New Roman'; styles['Normal'].font.size=Pt(9); styles['Normal'].font.color.rgb=RGBColor(49,65,77)
 styles['Normal'].paragraph_format.space_after=Pt(5)
 for style_name in ['Normal','Title','Heading 1','Heading 2']:
     el=styles[style_name]._element
@@ -17,11 +17,11 @@ for style_name in ['Normal','Title','Heading 1','Heading 2']:
     fonts=rpr.rFonts
     if fonts is None:
         fonts=OxmlElement('w:rFonts'); rpr.insert(0,fonts)
-    fonts.set(qn('w:ascii'),'Aptos'); fonts.set(qn('w:hAnsi'),'Aptos'); fonts.set(qn('w:eastAsia'),'Aptos')
+    fonts.set(qn('w:ascii'),'Times New Roman'); fonts.set(qn('w:hAnsi'),'Times New Roman'); fonts.set(qn('w:eastAsia'),'Times New Roman')
 title_ppr=styles['Title']._element.get_or_add_pPr()
 for border in list(title_ppr.findall(qn('w:pBdr'))): title_ppr.remove(border)
 for st,size,color in [('Title',25,'17394B'),('Heading 1',16,'157873'),('Heading 2',11,'23495B')]:
-    styles[st].font.name='Aptos Display'; styles[st].font.size=Pt(size); styles[st].font.bold=True; styles[st].font.color.rgb=RGBColor.from_string(color)
+    styles[st].font.name='Times New Roman'; styles[st].font.size=Pt(size); styles[st].font.bold=True; styles[st].font.color.rgb=RGBColor.from_string(color)
     styles[st].paragraph_format.space_before=Pt(12); styles[st].paragraph_format.space_after=Pt(5)
 
 def shade(cell, fill):
@@ -77,12 +77,12 @@ table(['Entity','Important fields','Purpose'],[
 para('Foreign keys are enabled. Shipment reference and user email are unique. Documents and audit rows belong to their parent records. Extracted fields are JSON in SQLite for this bounded demo; query-critical and shared fields should become typed columns as the product expands.')
 
 doc.add_heading('AI extraction and uncertainty',level=1)
-para('On upload, the server validates extension and size, writes the file under a random server-generated name, and extracts text from TXT, CSV and searchable PDF. It submits document type plus bounded text to a configured OpenAI-compatible endpoint and requests JSON-only fields explicitly present in the source. The response is parsed, keys are allow-listed, values are length-limited, and per-field confidence is averaged for display.')
-para('The model’s confidence is a self-reported signal, not a calibrated probability. Values below 0.80 are marked for review. Every value still requires a human confirmation action before manager approval. If a provider key is absent, the file contains no extractable text, or the request/response fails, the application returns no extracted values with zero confidence and asks the reviewer to enter values manually. It does not manufacture a successful extraction. Scanned image OCR is outside this build.')
+para('On upload, the server validates extension and size, writes the file under a random server-generated name, and extracts text from TXT, CSV and searchable PDF. It submits document type plus bounded text to a configured OpenAI-compatible endpoint and requests JSON-only fields explicitly present in the source, including invoice line items and their amounts. The response is parsed, keys are allow-listed, values are length-limited, line-item data is schema-checked, and per-field confidence is averaged for display.')
+para('The model’s confidence is a self-reported signal, not a calibrated probability. Values below 0.80 are highlighted as low confidence; all uploaded documents remain in review until a human confirms them. If a provider key is absent, the file contains no extractable text, or the request/response fails, the application returns no extracted values with zero confidence and asks the reviewer to enter values manually. It does not manufacture a successful extraction. Scanned image OCR is outside this build.')
 
 doc.add_heading('Cross-document rules and release gates',level=1)
-para('For each comparable field, the validation engine collects non-empty values from documents and compares them. Gross weight, package count and invoice reference are shown as matched or mismatched. A mismatch blocks manager approval and export. Correction forms update the stored value and append the old/new value, user and timestamp to the edit history.')
-para('A manager can approve only when at least one document exists, every document is confirmed, and no cross-check is mismatched. Export repeats those server-side checks and returns HTTP 409 when the shipment is not approved or no longer valid. The UI also reflects the gate, but the backend is authoritative.')
+para('Approval requires one confirmed commercial invoice, packing list and bill of lading. The validator compares gross weight, package count and invoice reference across all three document types; missing values are marked for review, while conflicting values are flagged as mismatches. It also sums the invoice line-item amounts and compares that sum to the stated invoice total, allowing a one-cent rounding tolerance. Missing required data or any mismatch blocks manager approval and export. Corrections are recorded with the old value, new value, reviewer and timestamp.')
+para('A manager can approve only when all three required document types are present, every uploaded document is confirmed, and every required cross-check is clear. Export repeats those server-side checks and returns HTTP 409 when the shipment is not approved or no longer valid. The UI also reflects the gate, but the backend is authoritative.')
 
 doc.add_heading('Screens and design decisions',level=1)
 table(['Screen','Design choice'],[
@@ -100,24 +100,25 @@ bullet('Inputs are validated, database access uses parameterized SQL, upload typ
 bullet('No API key is committed. Configure secrets in the host environment. Use HTTPS and persistent private storage for a deployed instance.')
 para('Synthetic demo accounts and sample shipment data are seeded for reviewer access. Demo passwords are for local evaluation and must be changed before public hosting.')
 
-doc.add_heading('Verification',level=1)
-para('Six automated tests cover seeded weight mismatch detection, no-key manual fallback, manager approval and verified CSV export, executive role denial and unresolved export blocking, and CSRF enforcement. Run with `python -m unittest discover -s tests -v`. The checks exercise the Flask app against temporary SQLite databases.')
+verification=doc.add_heading('Verification',level=1); verification.paragraph_format.page_break_before=True
+para('Nine automated tests cover all-three-document comparison, invoice line-total arithmetic and approval blocking, missing required-document gating, seeded weight mismatch, no-key manual fallback, manager approval and verified CSV export, executive role denial, unresolved export blocking, and CSRF enforcement. Run with `python -m unittest discover -s tests -v`. The checks exercise the Flask app against temporary SQLite databases.')
 
 doc.add_heading('Assumptions and limits',level=1)
 for x in [
-'Assumption: the selected problem is Brief 2, the customs broker document extraction and cross-check tool; the detailed source brief was not present in the workspace, so scope follows the supplied CargoLens recommendation.',
-'Assumption: invoice, packing list and bill of lading are the initial supported document types; the MVP compares gross weight, package count and invoice reference when present.',
+'Assumption: line-item totals are expressed in the invoice currency and may differ from the invoice total by at most 0.01 due to rounding.',
+'Assumption: invoice reference is available on the supplied invoice, packing list and bill of lading records; when a value is absent, the shipment remains in review until supplied or otherwise resolved.',
 'Assumption: a manager role represents the approval authority and an executive role performs documentation work.',
 'Assumption: synthetic shipment and company records are sufficient for reviewer demonstration; no real personal or customer data is used.',
 'Limit: scanned image OCR is not implemented. Text extraction from searchable PDFs, TXT and CSV works; other uploads fall into manual review.',
 'Limit: the provider response confidence is model-reported and is not calibrated or audited. Extraction is advisory and human confirmation is mandatory.',
+'Limit: cross-checking supports the listed shared numeric/reference fields and invoice line-total arithmetic; it does not interpret tax, discounts, exchange rates, duties or complex invoice formulas.',
 'Limit: SQLite and local file storage support a single-instance demo only. Production needs managed relational storage, private object storage, retention controls, monitoring and backups.',
 'Limit: the application is not deployed yet; add a live URL here if a host is configured.',
 ]: bullet(x)
 
 doc.add_heading('Cut scope and next work',level=1)
-para('Cut from this build: scanned-image OCR, multi-page visual document annotation, container-level matching, customs tariff classification, external customs integrations, multi-tenant organization management and production cloud deployment. These depend on requirements not included in the supplied brief or exceed the selected review slice.')
-para('Next: add a real OCR pipeline with page-level evidence citations; calibrate extraction confidence against a labeled document set; normalize line items and container records; move to PostgreSQL and private object storage; add retention and deletion workflows; expand audit history; deploy to a persistent HTTPS host and publish the repository.')
+para('Cut from this build: scanned-image OCR, multi-page visual document annotation, container-level matching, customs tariff classification, external customs integrations, multi-tenant organization management and production cloud deployment. These exceed the selected review slice and would need a separate product and integration plan.')
+para('Next: add a real OCR pipeline with page-level evidence citations; calibrate extraction confidence against a labeled document set; normalize line items and container records; move to PostgreSQL and private object storage; add retention and deletion workflows; expand audit history; deploy to a persistent HTTPS host.')
 
 doc.save(OUT)
 print(OUT)

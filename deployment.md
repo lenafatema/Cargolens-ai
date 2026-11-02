@@ -63,11 +63,6 @@ The demo database is local-only. Change demo credentials and set a strong `SECRE
 
 ## Deployment
 
-The app is a single Flask service with SQLite and a local upload directory. For a persistent single-instance host, install requirements and run behind a production WSGI server, for example:
+The repository includes a Render Blueprint in `render.yaml`. To create a public demo, sign in to Render, choose **New → Blueprint**, connect `lenafatema/Cargolens-ai`, and apply the blueprint. It builds the Flask app, runs Gunicorn, generates a `SECRET_KEY`, enables production cookie settings, and checks `/health`. Add `OPENAI_API_KEY` in the service environment if AI extraction is required; it is optional for manual review. Render provides the live URL after the service becomes healthy.
 
-```bash
-pip install gunicorn
-gunicorn --bind 0.0.0.0:${PORT:-8000} app:app
-```
-
-Configure the environment variable names above in the host's secret/configuration settings. Set `DATABASE_PATH` and `UPLOAD_DIR` to persistent mounted storage; both must be writable by the app. Set `FLASK_ENV=production` to enable the secure session cookie. Keep uploaded documents private, restrict host access, and configure HTTPS at the host or reverse proxy. The included SQLite/local-file deployment is intended for a demo or single instance; production multi-instance use requires managed PostgreSQL and private object storage. The public repository is https://github.com/lenafatema/Cargolens-ai. The application has not been deployed, so no live application URL is available.
+The Blueprint uses a free single instance. Render free web services spin down after 15 idle minutes, and their local filesystem is ephemeral; SQLite changes and uploaded files are lost on spin-down, restart or redeploy. Sample records are seeded again at startup, but reviewer changes and uploaded files will be lost. See [Render free plan limitations](https://render.com/docs/free). For a durable single-instance demo, use a paid service with a persistent disk and set `DATABASE_PATH` and `UPLOAD_DIR` to paths on that disk. For production multi-instance use, migrate to managed PostgreSQL and private object storage, configure retention and backups, and restrict access to uploaded trade documents. The application has not been deployed yet, so no live URL is available.
